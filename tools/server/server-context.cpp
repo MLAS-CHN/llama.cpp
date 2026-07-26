@@ -1709,7 +1709,7 @@ private:
         if (params_base.auto_disk_cache_max >= 0 && slot.prompt.n_tokens() > 0 && !slot.prompt.tokens.has_mtmd) {
             const std::string saved_path = disk_cache_save(
                 slot.prompt, slot.id, params_base.slot_save_path, ctx_tgt, ctx_dft.get(),
-                slot.task->user_msg_texts, params_base.auto_disk_cache_max);
+                slot.task->required_match_texts, slot.task->user_msg_texts, params_base.auto_disk_cache_max);
             if (!saved_path.empty() && !slot.disk_cache_loaded_path.empty()) {
                 // Replace the source cache entry once the updated state is safely persisted.
                 disk_cache_remove(params_base.slot_save_path, slot.disk_cache_loaded_path);
@@ -2521,7 +2521,7 @@ private:
                             slot.disk_cache_loaded_path.clear();
                             if (params_base.auto_disk_cache_max >= 0 && slot.task->params.cache_prompt && !input_tokens.has_mtmd) {
                                 const std::string cache_path = disk_cache_find(
-                                    params_base.slot_save_path, slot.task->user_msg_texts);
+                                    params_base.slot_save_path, slot.task->required_match_texts, slot.task->user_msg_texts);
                                 if (!cache_path.empty() && disk_cache_load(
                                         cache_path, slot.prompt, slot.id, ctx_tgt, ctx_dft.get())) {
                                     slot.disk_cache_loaded_path = cache_path;
@@ -3471,6 +3471,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
         // Extract user message texts for disk-cache matching
+        std::vector<std::string> required_match_texts = {
+            string_format("model_name=%s", meta->model_name.c_str()),
+            string_format("model_path=%s", meta->model_path.c_str()),
+            string_format("chat_template=%s", common_chat_templates_source(meta->chat_params.tmpls.get(), "").c_str()),
+        };
+        const std::string chat_template_tool_use = common_chat_templates_source(meta->chat_params.tmpls.get(), "tool_use");
+        if (!chat_template_tool_use.empty()) {
+            required_match_texts.push_back(string_format("chat_template_tool_use=%s", chat_template_tool_use.c_str()));
+        }
+
         std::vector<std::string> user_msg_texts;
         if (data.contains("user_msg_texts")) {
             user_msg_texts = data["user_msg_texts"].get<std::vector<std::string>>();
@@ -3482,6 +3492,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.id = rd.get_new_id();
 
             task.tokens = std::move(inputs[i]);
+            task.required_match_texts = required_match_texts;
             task.user_msg_texts = user_msg_texts;
             task.params = server_task::params_from_json_cmpl(
                     ctx_server.vocab,

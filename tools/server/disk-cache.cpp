@@ -16,12 +16,13 @@
 namespace {
 
 constexpr char INDEX_FILE[] = "index.json";
+constexpr char REQUIRED_MATCH_KEY[] = "required_match_texts";
+constexpr char USER_MSG_KEY[] = "user_msg_texts";
+constexpr char HASH_KEY[] = "hash";
 constexpr char KVCACHE_MAGIC[8] = {'K', 'V', 'C', 'A', 'C', 'H', 'E', '\0'};
 constexpr char CKPT_MAGIC[8] = {'C', 'K', 'P', 'T', '\0', '\0', '\0', '\0'};
 constexpr uint32_t KVCACHE_VERSION = 1;
 constexpr uint32_t CKPT_VERSION = 1;
-constexpr size_t PLAINTEXT_MAX_LEN = 500;
-constexpr size_t PREVIEW_MAX_LEN = 50;
 
 static inline uint32_t rotr32(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32 - n));
@@ -218,37 +219,6 @@ std::string hash_text(const std::string & text) {
     return out.str();
 }
 
-std::string make_preview(const std::string & text, size_t max_len) {
-    if (text.size() <= max_len) {
-        return text;
-    }
-
-    return text.substr(0, max_len);
-}
-
-void log_user_messages(const char * prefix, const std::vector<std::string> & user_msg_texts) {
-    SRV_INF("[auto-cache] %s: %zu user messages\n", prefix, user_msg_texts.size());
-
-    for (size_t i = 0; i < user_msg_texts.size(); ++i) {
-        SRV_INF("[auto-cache] %s msg[%zu] len=%zu text=%s\n",
-                prefix, i, user_msg_texts[i].size(), user_msg_texts[i].c_str());
-    }
-}
-
-std::string describe_index_entry(const json & entry) {
-    if (entry.contains("text")) {
-        return string_format("text=%s", entry["text"].get<std::string>().c_str());
-    }
-
-    if (entry.contains("hash")) {
-        const std::string preview = entry.value("preview", "");
-        return string_format("hash=%s preview=%s",
-                entry["hash"].get<std::string>().c_str(), preview.c_str());
-    }
-
-    return "(unknown)";
-}
-
 json load_index(const std::string & slot_save_path) {
     const std::filesystem::path path = index_path(slot_save_path);
     std::ifstream in(path);
@@ -256,6 +226,8 @@ json load_index(const std::string & slot_save_path) {
     if (!in.is_open()) {
         return json::object();
     }
+
+    SRV_INF("[auto-cache] read index file=%s\n", path.string().c_str());
 
     try {
         json idx = json::parse(in);
@@ -279,18 +251,12 @@ void save_index(const std::string & slot_save_path, const json & idx) {
     }
 
     out << idx.dump(2);
+    SRV_INF("[auto-cache] wrote index file=%s\n", path.string().c_str());
 }
 
 json make_index_entry(const std::string & text) {
-    if (text.size() <= PLAINTEXT_MAX_LEN) {
-        return json{
-            {"text", text},
-        };
-    }
-
     return json{
-        {"hash",    hash_text(text)},
-        {"preview", make_preview(text, PREVIEW_MAX_LEN)},
+        {HASH_KEY, hash_text(text)},
     };
 }
 
@@ -299,11 +265,38 @@ bool match_index_entry(const json & entry, const std::string & query_text) {
         return query_text == entry["text"].get<std::string>();
     }
 
-    if (entry.contains("hash")) {
-        return hash_text(query_text) == entry["hash"].get<std::string>();
+    if (entry.contains(HASH_KEY)) {
+        return hash_text(query_text) == entry[HASH_KEY].get<std::string>();
     }
 
     return false;
+}
+
+json normalize_index_record(const json & record) {
+    return record;
+}
+
+bool match_index_list(
+    const json & record,
+    const char * key,
+    const std::vector<std::string> & query_texts) {
+
+    if (!record.is_object() || !record.contains(key) || !record[key].is_array()) {
+        return false;
+    }
+
+    const json & entry_list = record[key];
+    if (entry_list.size() != query_texts.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < query_texts.size(); ++i) {
+        if (!match_index_entry(entry_list[i], query_texts[i])) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void remove_file_pair(const std::filesystem::path & filepath) {
@@ -321,6 +314,8 @@ bool load_checkpoints(const std::filesystem::path & filepath, server_prompt & pr
     if (!in.is_open()) {
         return true;
     }
+
+    SRV_INF("[auto-cache] read checkpoint file=%s\n", ckpt_path.string().c_str());
 
     char magic[8];
     uint32_t version = 0;
@@ -409,6 +404,7 @@ bool save_checkpoints(const std::filesystem::path & filepath, const server_promp
         }
     }
 
+    SRV_INF("[auto-cache] wrote checkpoint file=%s\n", ckpt_path.string().c_str());
     return true;
 }
 
@@ -450,6 +446,7 @@ void evict_old_entries(const std::string & slot_save_path, int max_pairs) {
 
 std::string disk_cache_find(
     const std::string & slot_save_path,
+    const std::vector<std::string> & required_match_texts,
     const std::vector<std::string> & user_msg_texts) {
 
     if (user_msg_texts.empty()) {
@@ -462,52 +459,25 @@ std::string disk_cache_find(
         return "";
     }
 
-    SRV_INF("[auto-cache] lookup start: path=%s\n", slot_save_path.c_str());
-    log_user_messages("lookup", user_msg_texts);
-
     const json idx = load_index(slot_save_path);
     std::string best_filename;
 
-    for (const auto & [filename, msg_list] : idx.items()) {
-        if (!msg_list.is_array() || msg_list.size() != user_msg_texts.size()) {
-            SRV_INF("[auto-cache] skip candidate %s: message count mismatch (%zu != %zu)\n",
-                    filename.c_str(), msg_list.size(), user_msg_texts.size());
-            continue;
-        }
-
+    for (const auto & [filename, raw_record] : idx.items()) {
         const std::filesystem::path filepath = std::filesystem::path(slot_save_path) / filename;
         if (!std::filesystem::is_regular_file(filepath)) {
-            SRV_INF("[auto-cache] skip candidate %s: file not found on disk\n", filename.c_str());
             continue;
         }
 
-        SRV_INF("[auto-cache] checking candidate %s\n", filename.c_str());
-
-        bool matched = true;
-        for (size_t i = 0; i < user_msg_texts.size(); ++i) {
-            if (!match_index_entry(msg_list[i], user_msg_texts[i])) {
-                SRV_INF("[auto-cache] candidate %s mismatch at msg[%zu]: query=%s stored=%s\n",
-                        filename.c_str(), i, user_msg_texts[i].c_str(), describe_index_entry(msg_list[i]).c_str());
-                matched = false;
-                break;
-            }
-
-            SRV_INF("[auto-cache] candidate %s matched msg[%zu]: %s\n",
-                    filename.c_str(), i, user_msg_texts[i].c_str());
-        }
-
-        if (matched) {
+        const json record = normalize_index_record(raw_record);
+        if (match_index_list(record, REQUIRED_MATCH_KEY, required_match_texts) &&
+            match_index_list(record, USER_MSG_KEY, user_msg_texts)) {
             best_filename = filename;
         }
     }
 
     if (best_filename.empty()) {
-        SRV_INF("[auto-cache] no exact match found under %s\n", slot_save_path.c_str());
         return "";
     }
-
-    SRV_INF("[auto-cache] found exact match (%zu user messages) in %s\n",
-            user_msg_texts.size(), best_filename.c_str());
 
     return (std::filesystem::path(slot_save_path) / best_filename).string();
 }
@@ -519,7 +489,7 @@ bool disk_cache_load(
     llama_context * ctx_tgt,
     llama_context * ctx_dft) {
 
-    SRV_INF("[auto-cache] load start: file=%s slot=%d\n", filepath.c_str(), slot_id);
+    SRV_INF("[auto-cache] read cache file=%s slot=%d\n", filepath.c_str(), slot_id);
 
     std::ifstream in(filepath, std::ios::binary);
     if (!in.is_open()) {
@@ -589,10 +559,6 @@ bool disk_cache_load(
 
     load_checkpoints(filepath, prompt);
 
-    SRV_INF("[auto-cache] loaded file=%s slot=%d tokens=%u%s\n",
-            filepath.c_str(), slot_id, n_tokens,
-            prompt.checkpoints.empty() ? "" : string_format(" with %zu checkpoints", prompt.checkpoints.size()).c_str());
-
     return true;
 }
 
@@ -602,6 +568,7 @@ std::string disk_cache_save(
     const std::string & slot_save_path,
     llama_context * ctx_tgt,
     llama_context * ctx_dft,
+    const std::vector<std::string> & required_match_texts,
     const std::vector<std::string> & user_msg_texts,
     int max_pairs) {
 
@@ -627,9 +594,8 @@ std::string disk_cache_save(
     const size_t size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, slot_id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
     const uint32_t n_tokens = (uint32_t) prompt.n_tokens();
 
-    SRV_INF("[auto-cache] save start: file=%s slot=%d tokens=%u main=%zu drft=%zu\n",
+    SRV_INF("[auto-cache] write cache file=%s slot=%d tokens=%u main=%zu drft=%zu\n",
             filepath.string().c_str(), slot_id, n_tokens, size_tgt, size_dft);
-    log_user_messages("save", user_msg_texts);
 
     std::ofstream out(filepath, std::ios::binary);
     if (!out.is_open()) {
@@ -684,18 +650,23 @@ std::string disk_cache_save(
     save_checkpoints(filepath, prompt);
 
     json idx = load_index(slot_save_path);
-    json entries = json::array();
+    json required_entries = json::array();
+    json user_entries = json::array();
 
-    for (const auto & text : user_msg_texts) {
-        entries.push_back(make_index_entry(text));
+    for (const auto & text : required_match_texts) {
+        required_entries.push_back(make_index_entry(text));
     }
 
-    idx[filename] = std::move(entries);
+    for (const auto & text : user_msg_texts) {
+        user_entries.push_back(make_index_entry(text));
+    }
+
+    idx[filename] = json{
+        {REQUIRED_MATCH_KEY, std::move(required_entries)},
+        {USER_MSG_KEY,       std::move(user_entries)},
+    };
     save_index(slot_save_path, idx);
     evict_old_entries(slot_save_path, max_pairs);
-
-    SRV_INF("[auto-cache] saved file=%s slot=%d tokens=%u main=%zu drft=%zu\n",
-            filepath.string().c_str(), slot_id, n_tokens, size_tgt, size_dft);
 
     return filepath.string();
 }

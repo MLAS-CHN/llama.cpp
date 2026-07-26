@@ -142,6 +142,9 @@ struct server_task {
     task_params   params;
     server_tokens tokens;
 
+    // Fields that must match exactly before a disk cache entry can be reused.
+    std::vector<std::string> required_match_texts;
+
     // User message strings for disk-cache matching (pure text, no tool results)
     std::vector<std::string> user_msg_texts;
 
@@ -233,6 +236,8 @@ struct server_task {
         copy.type      = type;
         copy.tokens    = tokens.clone();
         copy.id_slot   = -1; // child tasks cannot specify slot
+        copy.required_match_texts = required_match_texts;
+        copy.user_msg_texts = user_msg_texts;
 
         // use different sampling seed for each child
         // note: https://github.com/ggml-org/llama.cpp/pull/18700#discussion_r2675115723
