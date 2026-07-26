@@ -72,6 +72,8 @@ class ServerProcess:
     n_predict: int | None = None
     n_prompts: int | None = 0
     slot_save_path: str | None = None
+    auto_disk_cache: bool | None = False
+    auto_disk_cache_max: int | None = None
     id_slot: int | None = None
     cache_prompt: bool | None = None
     n_slots: int | None = None
@@ -208,6 +210,10 @@ class ServerProcess:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
             server_args.extend(["--slot-save-path", self.slot_save_path])
+        if self.auto_disk_cache:
+            server_args.append("--auto-disk-cache")
+        if self.auto_disk_cache_max is not None:
+            server_args.extend(["--auto-disk-cache-max", self.auto_disk_cache_max])
         if self.n_ga:
             server_args.extend(["--grp-attn-n", self.n_ga])
         if self.n_ga_w:

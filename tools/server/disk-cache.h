@@ -2,21 +2,18 @@
 
 #include <string>
 #include <vector>
-#include "server-common.h"  // server_tokens, SRV_INF
-#include "server-task.h"    // server_prompt
-#include "llama.h"          // llama_context, llama_state_seq_*
+#include "server-task.h"
+#include "llama.h"
 
-// Find the best .kvcache file by user message text/hash exact match.
-// user_msg_texts: list of user message strings (pure text, no tool results).
+// Find the newest .kvcache file whose indexed user messages exactly match.
 // Returns filepath, or empty if no exact match found.
 std::string disk_cache_find(
     const std::string & slot_save_path,
-    const std::vector<uint8_t> & /*user_msg_hashes*/,
     const std::vector<std::string> & user_msg_texts);
 
-// Load KV state + checkpoints from file into ctx/ctx_dft and prompt.
-// slot_id is the seq_id for KV state operations.
-void disk_cache_load(
+// Load KV state + checkpoints from file into ctx_tgt/ctx_dft and prompt.
+// Returns true on success.
+bool disk_cache_load(
     const std::string & filepath,
     server_prompt & prompt,
     int slot_id,
@@ -35,3 +32,8 @@ std::string disk_cache_save(
     llama_context * ctx_dft,
     const std::vector<std::string> & user_msg_texts,
     int max_pairs);
+
+// Remove a .kvcache file pair and its index entry.
+void disk_cache_remove(
+    const std::string & slot_save_path,
+    const std::string & filepath);

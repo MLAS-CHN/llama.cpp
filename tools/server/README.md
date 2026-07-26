@@ -212,6 +212,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
+| `--auto-disk-cache` | automatically persist and restore prompt KV cache to disk (default: disabled, requires `--slot-save-path`) |
+| `--auto-disk-cache-max N` | max number of KV cache file pairs kept by `--auto-disk-cache` (default: 50, 0 = unlimited) |
 | `--media-path PATH` | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled) |
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |

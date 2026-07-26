@@ -1711,9 +1711,8 @@ private:
                 slot.prompt, slot.id, params_base.slot_save_path, ctx_tgt, ctx_dft.get(),
                 slot.task->user_msg_texts, params_base.auto_disk_cache_max);
             if (!saved_path.empty() && !slot.disk_cache_loaded_path.empty()) {
-                // new file written successfully — remove the file this slot was loaded from
-                std::filesystem::remove(slot.disk_cache_loaded_path);
-                std::filesystem::remove(slot.disk_cache_loaded_path + ".ckpt");
+                // Replace the source cache entry once the updated state is safely persisted.
+                disk_cache_remove(params_base.slot_save_path, slot.disk_cache_loaded_path);
                 slot.disk_cache_loaded_path.clear();
             }
         }
@@ -2522,10 +2521,9 @@ private:
                             slot.disk_cache_loaded_path.clear();
                             if (params_base.auto_disk_cache_max >= 0 && slot.task->params.cache_prompt && !input_tokens.has_mtmd) {
                                 const std::string cache_path = disk_cache_find(
-                                    params_base.slot_save_path, std::vector<uint8_t>(), slot.task->user_msg_texts);
-                                if (!cache_path.empty()) {
-                                    disk_cache_load(
-                                        cache_path, slot.prompt, slot.id, ctx_tgt, ctx_dft.get());
+                                    params_base.slot_save_path, slot.task->user_msg_texts);
+                                if (!cache_path.empty() && disk_cache_load(
+                                        cache_path, slot.prompt, slot.id, ctx_tgt, ctx_dft.get())) {
                                     slot.disk_cache_loaded_path = cache_path;
                                 }
                             }
