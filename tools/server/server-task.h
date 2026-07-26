@@ -142,6 +142,9 @@ struct server_task {
     task_params   params;
     server_tokens tokens;
 
+    // User message strings for disk-cache matching (pure text, no tool results)
+    std::vector<std::string> user_msg_texts;
+
     // only used by CLI, this allow tokenizing CLI inputs on server side
     // we need this because mtmd_context and vocab are not accessible outside of server_context
     bool                    cli = false;

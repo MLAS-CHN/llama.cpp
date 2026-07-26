@@ -4,6 +4,7 @@
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"
+#include "disk-cache.h"
 #include "server-queue.h"
 
 #include "build-info.h"
@@ -106,6 +107,9 @@ struct server_slot {
     slot_state state = SLOT_STATE_IDLE;
 
     server_prompt prompt;
+
+    // path of .kvcache file loaded from disk for this slot; cleared after save deletes it
+    std::string disk_cache_loaded_path;
 
     void prompt_save(server_prompt_cache & prompt_cache) const {
         GGML_ASSERT(prompt.data.size() == 0);
@@ -1701,6 +1705,19 @@ private:
 
         res->generation_params = slot.task->params; // copy the parameters
 
+        // auto-disk-cache: persist KV state to disk
+        if (params_base.auto_disk_cache_max >= 0 && slot.prompt.n_tokens() > 0 && !slot.prompt.tokens.has_mtmd) {
+            const std::string saved_path = disk_cache_save(
+                slot.prompt, slot.id, params_base.slot_save_path, ctx_tgt, ctx_dft.get(),
+                slot.task->user_msg_texts, params_base.auto_disk_cache_max);
+            if (!saved_path.empty() && !slot.disk_cache_loaded_path.empty()) {
+                // new file written successfully — remove the file this slot was loaded from
+                std::filesystem::remove(slot.disk_cache_loaded_path);
+                std::filesystem::remove(slot.disk_cache_loaded_path + ".ckpt");
+                slot.disk_cache_loaded_path.clear();
+            }
+        }
+
         queue_results.send(std::move(res));
     }
 
@@ -2499,6 +2516,18 @@ private:
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
                                 continue;
+                            }
+
+                            // auto-disk-cache: restore KV state from disk if available
+                            slot.disk_cache_loaded_path.clear();
+                            if (params_base.auto_disk_cache_max >= 0 && slot.task->params.cache_prompt && !input_tokens.has_mtmd) {
+                                const std::string cache_path = disk_cache_find(
+                                    params_base.slot_save_path, std::vector<uint8_t>(), slot.task->user_msg_texts);
+                                if (!cache_path.empty()) {
+                                    disk_cache_load(
+                                        cache_path, slot.prompt, slot.id, ctx_tgt, ctx_dft.get());
+                                    slot.disk_cache_loaded_path = cache_path;
+                                }
                             }
 
                             if (slot.task->params.cache_prompt) {
@@ -3443,12 +3472,19 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
+        // Extract user message texts for disk-cache matching
+        std::vector<std::string> user_msg_texts;
+        if (data.contains("user_msg_texts")) {
+            user_msg_texts = data["user_msg_texts"].get<std::vector<std::string>>();
+        }
+
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id = rd.get_new_id();
 
             task.tokens = std::move(inputs[i]);
+            task.user_msg_texts = user_msg_texts;
             task.params = server_task::params_from_json_cmpl(
                     ctx_server.vocab,
                     params,

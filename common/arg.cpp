@@ -3093,6 +3093,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--auto-disk-cache"},
+        "automatically persist and restore KV cache to disk (max 50 file pairs, use --auto-disk-cache-max to change limit; requires --slot-save-path)",
+        [](common_params & params) {
+            params.auto_disk_cache_max = 50;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--auto-disk-cache-max"}, "N",
+        "max number of KV cache file pairs (0 = unlimited; implies --auto-disk-cache)",
+        [](common_params & params, int val) {
+            params.auto_disk_cache_max = val;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--media-path"}, "PATH",
         "directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)",
         [](common_params & params, const std::string & value) {

@@ -107,6 +107,12 @@ int main(int argc, char ** argv) {
         params.kv_unified = true;
     }
 
+    // validate auto-disk-cache dependency
+    if (params.auto_disk_cache_max >= 0 && params.slot_save_path.empty()) {
+        SRV_ERR("%s", "--auto-disk-cache requires --slot-save-path to be set\n");
+        return 1;
+    }
+
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     if (params.model_alias.empty() && !params.model.name.empty()) {
         params.model_alias.insert(params.model.name);

@@ -1146,6 +1146,20 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    // Extract user message texts for disk-cache matching
+    // Only include pure text user messages (skip tool results)
+    {
+        json text_array = json::array();
+        for (const auto & msg : inputs.messages) {
+            if (msg.role != "user") continue;
+            if (msg.content.empty()) continue;
+            text_array.push_back(msg.content);
+        }
+        if (!text_array.empty()) {
+            llama_params["user_msg_texts"] = text_array;
+        }
+    }
+
     return llama_params;
 }
 
